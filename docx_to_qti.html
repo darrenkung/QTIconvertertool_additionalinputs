@@ -1707,6 +1707,23 @@ async function parseDocxToQuestions(file, msAnswers) {
     return opts;
   }
 
+  // NEW: handle rows where cell[0] is empty, cell[1] is exactly A/B/C/D,
+// and cell[2] is the option text (3-column Singapore exam format).
+function extractSplitOptFromRow(row) {
+  const c0 = (row[0] || '').replace(/<[^>]+>/g, '').trim();
+  const c1 = (row[1] || '').replace(/<[^>]+>/g, '').trim();
+  if (c0 === '' && /^[A-D]$/i.test(c1) && row.length >= 3) {
+    // Join remaining cells (from index 2 onwards) as the option text,
+    // skipping any that are just answer-box placeholders like "( )"
+    const optText = row.slice(2)
+      .map(c => c.replace(/<[^>]+>/g, '').trim())
+      .filter(c => c && !/^\(\s*\)$/.test(c))
+      .join(' ');
+    return optText;
+  }
+  return null;
+}
+
   // Check if individual paragraphs of a question cell contain embedded A/B/C/D options
   // as separate paragraphs (common in H1/H2 papers where options follow the stem in
   // the same table cell, each starting with the option letter).
@@ -2004,14 +2021,24 @@ async function parseDocxToQuestions(file, msAnswers) {
             const optFn   = optRids.length ? await resolveImage(optRids[0]) : null;
             curOptImages.push(optFn);
 
-          } else if (!r0) {
-            const opts = extractOptsFromRow(row);
-            if (opts.length >= 2) {
-              curOpts.push(...opts);
-              // No per-option images for this format (letter embedded in cell text)
-              for (let k = 0; k < opts.length; k++) curOptImages.push(null);
-            } else {
-              // Check for image-only options where each cell is just 'A','B','C','D'
+         } else if (!r0) {
+  // NEW: check for split format first (empty | A | option text)
+  const splitOpt = extractSplitOptFromRow(row);
+  if (splitOpt !== null) {
+    curOpts.push(splitOpt);
+    // Check for image in cell[2] onwards for this row
+    const optRids = item.cellImages && item.cellImages[ri]
+      ? (item.cellImages[ri].slice(2).flat()) : [];
+    const optFn = optRids.length ? await resolveImage(optRids[0]) : null;
+    curOptImages.push(optFn);
+  } else {
+    const opts = extractOptsFromRow(row);
+    if (opts.length >= 2) {
+      curOpts.push(...opts);
+      // No per-option images for this format (letter embedded in cell text)
+      for (let k = 0; k < opts.length; k++) curOptImages.push(null);
+    } else {
+      // Check for image-only options where each cell is just 'A','B','C','D'
               // (e.g. Q5-style: ['','A','B','C','D'] with raster images per cell)
               const optSlice   = row.slice(1).filter(c => c.replace(/<[^>]+>/g,'').trim());
               const allLetters = optSlice.length >= 2 &&
@@ -2037,7 +2064,8 @@ async function parseDocxToQuestions(file, msAnswers) {
             if (extra) curQ.tokens.push({ type:'text', value: extra });
           }
         }
-      } else if (curQ) {
+      }
+    }else if (curQ) {
         // ── Continuation table — detect A/B/C/D option rows OR transposed format ──
         const transpHdr = findTransposedOptions(rows);
         if (transpHdr !== null && !curOpts.length) {
