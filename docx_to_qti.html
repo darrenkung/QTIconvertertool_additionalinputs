@@ -1010,10 +1010,6 @@ function mergeAdjacentTags(text) {
   return text;
 }
 function halfIfDoubled(s) {
-  // Recursively halve a string that is an exact repeat of itself.
-  // Fixes Word XML diagram labels duplicated in cells: 'cablecable'→'cable',
-  // ×4 repetition: 'tension in cabletension in cabletension in cabletension in cable'
-  // → ×2 → ×1 via recursion.
   const n = s.length;
   if (n >= 10 && n % 2 === 0) {
     const mid = n >> 1;
@@ -1047,7 +1043,6 @@ function getREmbed(el) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Extract all tables from a parsed DOCX XML document
-// Returns Array of rows-of-cells:  [ [ [cell,cell,...], [cell,...] ], ... ]
 // ─────────────────────────────────────────────────────────────────────────────
 function extractTables(xmlDoc) {
   const tables = [];
@@ -1070,9 +1065,6 @@ function extractTables(xmlDoc) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MARK-SCHEME PARSER
-// Returns { qnum_str: answer_str }
-//   MCQ  : { '1': 'b', '2': 'c', … }   (lowercase = simpleChoice identifier)
-//   Essay: { '1': '1a: text\n1bi: text\n…', … }
 // ─────────────────────────────────────────────────────────────────────────────
 async function parseMarkScheme(msFile) {
   const buf    = await msFile.arrayBuffer();
@@ -1090,34 +1082,28 @@ async function parseMarkScheme(msFile) {
     for (let r = 0; r < table.length; r++) {
       for (let c = 0; c < table[r].length; c++) {
         const cell = (table[r][c] || '').trim().toUpperCase();
-        // Match Q-number (e.g. "1", "01", "Q1", "Q01")
         const mQ = cell.match(/^[Q]?0*(\d+)$/);
         if (mQ) {
           const qnStr = mQ[1];
           let foundAns = false;
 
-          // Check right cell (column-style)
           if (c + 1 < table[r].length) {
             const right = (table[r][c+1] || '').trim().toUpperCase();
             if (/^[ABCD]$/.test(right)) { answers[qnStr] = right.toLowerCase(); foundAns = true; }
             else if (/^[1234]$/.test(right)) { answers[qnStr] = String.fromCharCode(96 + parseInt(right)); foundAns = true; }
             else if (right.length > 0) {
-              // Could be structured answer test (e.g. "Q34" -> "This is the answer")
               if (answers[qnStr] && answers[qnStr].length > 1) answers[qnStr] += '\n' + right;
               else answers[qnStr] = right;
               foundAns = true;
             }
           }
 
-          // Check bottom cell (row-style) 
-          // Only check bottom if we didn't find a clean right answer, or if we want to catch alternating rows
           if (!foundAns && r + 1 < table.length) {
             const bottom = (table[r+1][c] || '').trim().toUpperCase();
             if (/^[ABCD]$/.test(bottom)) { answers[qnStr] = bottom.toLowerCase(); foundAns = true; }
             else if (/^[1234]$/.test(bottom)) { answers[qnStr] = String.fromCharCode(96 + parseInt(bottom)); foundAns = true; }
           }
         } else {
-          // Check for structured like "Q34: answer" inside a single cell
           const structMatch = cell.match(/^[Q]?0*(\d+)[.:：]\s*(.*)/i);
           if (structMatch) {
             const qnStr = structMatch[1];
@@ -1136,7 +1122,6 @@ async function parseMarkScheme(msFile) {
     const pt = Array.from(p.getElementsByTagNameNS(W, 't')).map(t => t.textContent).join('').trim();
     if (!pt) continue;
 
-    // Matches Q34. Q34: Q34  or  34. 34: (Requires punctuation if no Q is present)
     let qnum = null;
     let ansText = "";
     const m1 = pt.match(/^[Qq]0*(\d+)[.:：\s]*(.*)/);
@@ -1150,7 +1135,6 @@ async function parseMarkScheme(msFile) {
       if (/^[ABCD]$/.test(cleanAns)) { ansText = cleanAns.toLowerCase(); isMcq = true; }
       else if (/^[1234]$/.test(cleanAns)) { ansText = String.fromCharCode(96 + parseInt(cleanAns)); isMcq = true; }
       
-      // Protect existing single-letter MCQ answers from being overwritten by false paragraph hits
       if (answers[qnum] && /^[a-d]$/.test(answers[qnum])) {
          if (isMcq) answers[qnum] = ansText;
          currentQnum = null;
@@ -1175,18 +1159,13 @@ async function parseMarkScheme(msFile) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Iterate body children → yield {type, value}
-// type = 'text' | 'image' | 'table'
 // ─────────────────────────────────────────────────────────────────────────────
 function* iterBlockItems(body) {
   for (const child of body.childNodes) {
     if (child.nodeType !== 1) continue;
     const tag = child.localName;
 
-    // ── Paragraph ──────────────────────────────────────────────────────
     if (tag === 'p') {
-      // Extract DOCX automatic-list numbering info (numId + indent level).
-      // Some docs generate "1." / "a." labels via <w:numPr> rather than
-      // embedding the number as plain text inside <w:t>.
       let numPr = null;
       const pPrEl = child.getElementsByTagNameNS(W,'pPr')[0];
       if (pPrEl) {
@@ -1195,7 +1174,6 @@ function* iterBlockItems(body) {
           const numIdEl = numPrEl.getElementsByTagNameNS(W,'numId')[0];
           const ilvlEl  = numPrEl.getElementsByTagNameNS(W,'ilvl')[0];
           const numId   = numIdEl ? getWVal(numIdEl) : null;
-          // numId="0" means "no list" in Word — treat as non-list
           if (numId && numId !== '0') {
             numPr = { numId, ilvl: ilvlEl ? getWVal(ilvlEl) : '0' };
           }
@@ -1204,8 +1182,6 @@ function* iterBlockItems(body) {
 
       const parts = [];
 
-      // Skip runs that are inside <w:drawing> or <w:pict> (canvas/shape label text,
-      // not part of the readable paragraph flow).
       const drawingRunSet = new Set();
       for (const el of child.getElementsByTagNameNS(W,'drawing')) {
         for (const r of el.getElementsByTagNameNS(W,'r')) drawingRunSet.add(r);
@@ -1214,7 +1190,6 @@ function* iterBlockItems(body) {
         for (const r of el.getElementsByTagNameNS(W,'r')) drawingRunSet.add(r);
       }
 
-      // Dictionary to map legacy Singapore HYPY font ASCII keys to Unicode Pinyin
       const hypyMap = {
         'C': 'ǎ', 'H': 'ǐ', 'K': 'ē', 'N': 'è', 'P': 'ē', 'Q': 'ó', 'S': 'è',
         'A': 'ā', 'B': 'á', 'D': 'à', 'E': 'ō', 'F': 'ó', 'G': 'ǒ',
@@ -1226,12 +1201,9 @@ function* iterBlockItems(body) {
       }
 
       for (const run of child.getElementsByTagNameNS(W,'r')) {
-        if (drawingRunSet.has(run)) continue;  // skip diagram/shape label text
-        // Skip deleted-text runs
+        if (drawingRunSet.has(run)) continue;
         if (run.getElementsByTagNameNS(W,'del').length) continue;
 
-        // OLE MathType/object runs often have no text payload.
-        // Emit a LaTeX placeholder so SLS can still render math text context.
         if (run.getElementsByTagNameNS(W,'object').length) {
           parts.push('$$\\\\text{[equation]}$$');
           continue;
@@ -1243,7 +1215,6 @@ function* iterBlockItems(body) {
 
         const rPr = run.getElementsByTagNameNS(W,'rPr')[0];
         if (rPr) {
-          // Detect legacy HYPY font and translate its proprietary mapping to Unicode
           const rFonts = rPr.getElementsByTagNameNS(W,'rFonts')[0];
           if (rFonts) {
             const fontName = rFonts.getAttributeNS(W, 'ascii') || rFonts.getAttribute('w:ascii');
@@ -1267,12 +1238,8 @@ function* iterBlockItems(body) {
       }
 
       const paraText = mergeAdjacentTags(parts.join('').trim());
-      // Yield if there is text content, or if this paragraph carries list-
-      // numbering metadata (so the parser can detect question/option role
-      // even when the label is generated by Word, not stored in <w:t>).
       if (paraText || numPr) yield { type: 'text', value: paraText || '', numPr };
 
-      // Images embedded in this paragraph — DrawingML (modern) + VML (legacy)
       for (const blip of child.getElementsByTagNameNS(A,'blip')) {
         const rId = getREmbed(blip);
         if (rId) yield { type: 'image', value: rId };
@@ -1283,36 +1250,24 @@ function* iterBlockItems(body) {
       }
     }
 
-    // ── Table ───────────────────────────────────────────────────────────
     else if (tag === 'tbl') {
       const rows = [];
-      const rowImages  = [];   // rowImages[i]    = all rIds in row i
-      const cellImages = [];   // cellImages[i][j] = rIds in cell (i,j)
-      const cellParas  = [];   // cellParas[i][j]  = individual paragraph texts (un-joined)
+      const rowImages  = [];
+      const cellImages = [];
+      const cellParas  = [];
       const seenRids = new Set();
 
-      // Walk ALL <w:tr> descendants (includes nested table rows so that
-      // "which row?" questions have their A/B/C/D option rows processed).
       for (const tr of child.getElementsByTagNameNS(W,'tr')) {
         const cells = [];
         const thisRowImgs = [];
-        const thisRowCellImgs = [];   // per-cell images for this row
-        const thisRowCellParas = [];  // per-cell paragraph arrays (un-joined)
+        const thisRowCellImgs = [];
+        const thisRowCellParas = [];
 
-        // Use DIRECT <w:tc> children of this row only.
-        // getElementsByTagNameNS would also return cells from any nested tables
-        // inside a cell, inflating rows[0] with nested-table content.
         for (const tc of directKids(tr, W, 'tc')) {
-
-          // Extract text from DIRECT <w:p> children of the cell only
-          // (does not descend into nested <w:tbl> elements).
-          // Paragraphs are joined with a space so multi-line option cells like
-          // ['A', 'option text'] produce 'A option text' for OPT_CELL_RE.
           const paraTexts = [];
-          const seenParas = new Set();   // cross-paragraph dedup (Word merged-cell artefact)
+          const seenParas = new Set();
           for (const para of directKids(tc, W, 'p')) {
             const runParts = [];
-            // Skip runs inside <w:drawing>/<w:pict> (canvas/shape labels, not flow text)
             const cellDrawingRunSet = new Set();
             for (const el of para.getElementsByTagNameNS(W,'drawing')) {
               for (const r of el.getElementsByTagNameNS(W,'r')) cellDrawingRunSet.add(r);
@@ -1321,7 +1276,7 @@ function* iterBlockItems(body) {
               for (const r of el.getElementsByTagNameNS(W,'r')) cellDrawingRunSet.add(r);
             }
             for (const run of para.getElementsByTagNameNS(W,'r')) {
-              if (cellDrawingRunSet.has(run)) continue;  // skip diagram/shape label text
+              if (cellDrawingRunSet.has(run)) continue;
               if (run.getElementsByTagNameNS(W,'del').length) continue;
               if (run.getElementsByTagNameNS(W,'object').length) {
                 runParts.push('$$\\\\text{[equation]}$$');
@@ -1332,12 +1287,17 @@ function* iterBlockItems(body) {
               if (!text) continue;
               const rPr = run.getElementsByTagNameNS(W,'rPr')[0];
               if (rPr) {
-                // Detect legacy HYPY font and translate its proprietary mapping to Unicode
                 const rFonts = rPr.getElementsByTagNameNS(W,'rFonts')[0];
                 if (rFonts) {
                   const fontName = rFonts.getAttributeNS(W, 'ascii') || rFonts.getAttribute('w:ascii');
                   if (fontName && fontName.toLowerCase() === 'hypy') {
-                    text = translateHypy(text);
+                    const hypyMap2 = {
+                      'C': 'ǎ', 'H': 'ǐ', 'K': 'ē', 'N': 'è', 'P': 'ē', 'Q': 'ó', 'S': 'è',
+                      'A': 'ā', 'B': 'á', 'D': 'à', 'E': 'ō', 'F': 'ó', 'G': 'ǒ',
+                      'I': 'ī', 'J': 'í', 'L': 'ì', 'M': 'ū', 'O': 'ǔ', 'R': 'ú', 'T': 'ù',
+                      'U': 'ǖ', 'V': 'ǘ', 'W': 'ǚ', 'X': 'ǜ', 'Y': 'ě', 'Z': 'ě'
+                    };
+                    text = text.split('').map(c => hypyMap2[c] || c).join('');
                   }
                 }
 
@@ -1355,22 +1315,18 @@ function* iterBlockItems(body) {
               runParts.push(text);
             }
             let paraText = mergeAdjacentTags(runParts.join('').trim());
-            // Detect doubling via HTML-stripped plain text so '<strong>XX</strong>'
-            // (from merged adjacent tags) is still caught.
             const plainText = paraText.replace(/<[^>]+>/g, '');
             const dedupedText = halfIfDoubled(plainText);
-            if (dedupedText !== plainText) paraText = dedupedText;  // use plain deduped
+            if (dedupedText !== plainText) paraText = dedupedText;
             paraText = paraText.trim();
-            // Cross-paragraph dedup: skip repeated paragraphs (Word merged-cell artefact)
             if (paraText && !seenParas.has(paraText)) {
               seenParas.add(paraText);
               paraTexts.push(paraText);
             }
           }
           cells.push(paraTexts.join(' '));
-          thisRowCellParas.push([...paraTexts]);   // keep individual paragraphs for embedded-option detection
+          thisRowCellParas.push([...paraTexts]);
 
-          // Collect images from this cell — DrawingML + VML — per-cell and per-row
           const thisCellImgs = [];
           for (const blip of tc.getElementsByTagNameNS(A,'blip')) {
             const rId = getREmbed(blip);
@@ -1388,8 +1344,6 @@ function* iterBlockItems(body) {
         cellParas.push(thisRowCellParas);
       }
       yield { type: 'table', value: rows, rowImages, cellImages, cellParas };
-      // Yield images from non-option rows as stem images after the table.
-      // Option rows (first cell = single letter A-D) keep their images at option level.
       for (let ri = 0; ri < rows.length; ri++) {
         const fp = (rows[ri][0] || '').replace(/<[^>]+>/g, '').trim();
         if (!/^[A-D]$/i.test(fp)) {
@@ -1441,9 +1395,6 @@ const LETTERS = ['a','b','c','d','e','f'];
 function mcqItemXml(q, answerText) {
   const id  = `Q${pad3(q.qnum)}_${randomId()}`;
   const ttl = escXml(stripTags(q.tokens.find(t=>t.type==='text')?.value||'').slice(0,70));
-  // Only emit <correctResponse> when answerText is a valid simpleChoice identifier
-  // (a–f).  An empty string or "None" is not a valid QTI identifier and causes
-  // SLS to reject the entire ZIP with "Processing unsuccessful".
   const validAns = LETTERS.includes((answerText || '').toLowerCase())
     ? (answerText).toLowerCase() : null;
   const correctEl = validAns
@@ -1473,36 +1424,26 @@ ${correctEl}</responseDeclaration>
 
 function essayItemXml(q, answerText) {
   const id = `Q${pad3(q.qnum)}_${randomId()}`;
-  // Only emit answer elements when there is a real answer (not the placeholder "None").
   const hasAnswer = answerText && answerText.trim() && answerText !== 'None';
 
-  // <correctResponse> inside <responseDeclaration> — stores the answer in the QTI data model.
   const correctEl = hasAnswer
     ? `\n  <correctResponse><value>${escXml(answerText)}</value></correctResponse>`
     : '';
 
-  // FEEDBACK outcome — baseType MUST be "identifier" per QTI 2.1 spec (§6.4).
-  // No defaultValue needed: responseProcessing sets it unconditionally below.
   const feedbackOutcomeEl = hasAnswer
     ? `\n<outcomeDeclaration identifier="FEEDBACK" cardinality="single" baseType="identifier"/>`
     : '';
 
-  // <rubricBlock view="scorer"> — QTI standard marking-guide panel shown to scorers.
   const rubricEl = hasAnswer
     ? `\n  <rubricBlock view="scorer"><p>${escXml(answerText)}</p></rubricBlock>`
     : '';
 
-  // <modalFeedback showHide="show"> — shown after response processing fires.
-  // Per spec §9: "shown directly following response processing."
   const modalEl = hasAnswer
     ? `\n<modalFeedback outcomeIdentifier="FEEDBACK" showHide="show" identifier="modelAnswer" title="Suggested Answer">
   <p>${escXml(answerText)}</p>
 </modalFeedback>`
     : '';
 
-  // <responseProcessing> — unconditionally sets FEEDBACK = "modelAnswer" so
-  // the modalFeedback triggers for every submission. Without this, modalFeedback
-  // never fires because FEEDBACK stays NULL and showHide="show" requires a match.
   const rpEl = hasAnswer
     ? `\n<responseProcessing>
   <setOutcomeValue identifier="FEEDBACK">
@@ -1527,9 +1468,7 @@ function essayItemXml(q, answerText) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Main converter — split into two phases:
-//   parseDocxToQuestions → {allQuestions, resolvedImages}
-//   buildQtiZipBlob      → Blob (the ZIP file)
+// Main converter
 // ─────────────────────────────────────────────────────────────────────────────
 async function parseDocxToQuestions(file, msAnswers) {
   msAnswers = msAnswers || {};
@@ -1538,7 +1477,6 @@ async function parseDocxToQuestions(file, msAnswers) {
   const docxZip = await JSZip.loadAsync(buf);
   const parser  = new DOMParser();
 
-  // ── Parse document.xml ──────────────────────────────────────────────
   const docStr = await docxZip.file('word/document.xml').async('string');
   const xmlDoc = parser.parseFromString(docStr, 'application/xml');
   const body   = xmlDoc.getElementsByTagNameNS(W,'body')[0];
@@ -1556,7 +1494,6 @@ async function parseDocxToQuestions(file, msAnswers) {
     const rtSafe = escapeHTML(rtText);
     const baseSafe = escapeHTML(baseText);
     
-    // Create a fake <w:r> containing the generated HTML inside <w:t>
     const fakeR = xmlDoc.createElementNS(W, 'w:r');
     const fakeT = xmlDoc.createElementNS(W, 'w:t');
     fakeT.textContent = `<ruby>${baseSafe}<rp>(</rp><rt>${rtSafe}</rt><rp>)</rp></ruby>`;
@@ -1568,7 +1505,7 @@ async function parseDocxToQuestions(file, msAnswers) {
   }
 
   // ── Parse relationships (to resolve image rIds) ──────────────────────
-  const imageRelTarget = {};   // rId → 'media/imageN.ext'
+  const imageRelTarget = {};
   const relsFile = docxZip.file('word/_rels/document.xml.rels');
   if (relsFile) {
     const relsStr = await relsFile.async('string');
@@ -1580,17 +1517,11 @@ async function parseDocxToQuestions(file, msAnswers) {
   }
 
   // ── Parse numbering.xml → numFormatMap ────────────────────────────────
-  // Some documents use DOCX automatic list numbering (<w:numPr>) so that
-  // question numbers ("1.", "2.") and option letters ("a.", "b.") are
-  // rendered by Word at display time and are NOT present in <w:t> text.
-  // We resolve numId → numFmt ('decimal', 'lowerLetter', 'upperLetter', …)
-  // per indent-level so the parser can identify question stems vs options.
-  const numFormatMap = new Map();   // numId_string → Map(ilvl_string → fmtString)
+  const numFormatMap = new Map();
   const numXmlFile = docxZip.file('word/numbering.xml');
   if (numXmlFile) {
     const numXmlStr = await numXmlFile.async('string');
     const numXml    = parser.parseFromString(numXmlStr, 'application/xml');
-    // Step 1: Build abstractNumId → per-level format map
     const abstractNums = new Map();
     for (const an of numXml.getElementsByTagNameNS(W,'abstractNum')) {
       const anId   = an.getAttributeNS(W,'abstractNumId');
@@ -1602,7 +1533,6 @@ async function parseDocxToQuestions(file, msAnswers) {
       }
       abstractNums.set(anId, levels);
     }
-    // Step 2: Map concrete numId → abstractNum levels
     for (const num of numXml.getElementsByTagNameNS(W,'num')) {
       const numId  = num.getAttributeNS(W,'numId');
       const anIdEl = num.getElementsByTagNameNS(W,'abstractNumId')[0];
@@ -1615,7 +1545,7 @@ async function parseDocxToQuestions(file, msAnswers) {
 
   // ── Lazy image extractor ─────────────────────────────────────────────
   let imgCounter = 0;
-  const resolvedImages = {};   // rId → {filename, data: Uint8Array}
+  const resolvedImages = {};
 
   async function resolveImage(rId) {
     if (resolvedImages[rId]) return resolvedImages[rId].filename;
@@ -1631,43 +1561,21 @@ async function parseDocxToQuestions(file, msAnswers) {
   }
 
   // ── Regex patterns ──────────────────────────────────────────────────
-  // Matches question-start lines in multiple common formats:
-  //   "1 text"   "1. text"   "1) text"   "(1) text"
-  //   "Q1 text"  "q1 text"   "（1） text"  etc.
-  // Requires at least one whitespace after the delimiter to avoid matching
-  // decimal numbers like "1.2" or sub-question labels like "1(a)".
   const Q_RE        = /^(?:[Qq](\d+)(?:[\.\)\s:]*\s+)?|\((\d+)\)|（(\d+)）|(\d+)(?:[.)]\s+|\s+))([\s\S]+)/;
-  // e.g. "2(a)Write ..." or "2 (a) Write ..."
   const Q_SUBSTART_RE = /^(\d+)\s*\(([a-zA-Z])\)\s*([\s\S]*)$/;
-  // Options: A./A) uppercase letters
-  // OR ⑴⑵⑶⑷ circled bracket numbers (U+2474 - U+247B)
-  // OR ①②③④ circled solid numbers (U+2460 - U+2467)
-  // OR （1）（2） full-width Chinese brackets
-  // OR 1) / 1. / 1． numeric option labels
   const OPT_RE      = /^(?:[A-H][\.\)]\s*|[\u2474-\u247B]\s*|[\u2460-\u2467]\s*|[（(]\s*[1-8]\s*[）)]\s*|[1-8][\.\)．]\s*)(.*)/;
   const OPTIONS_HEADER_RE = /^(?:options|choices)(?:\s*[:：])?$/i;
   const STANDALONE_OPTION_LABEL_RE = /^[A-D]$/i;
   const INLINE_CLOZE_RE = /[Qq](\d{1,3})\s*[（(]([^）)]*)[）)]/u;
   const SECTION_HEADING_RE = /[一二三四五六七八九十]+、/u;
-  // Allow up to 5 uppercase-letter prefix (Word cross-ref codes like "XX23")
-  const QNUM_ONLY   = /^[A-Z]{0,5}(\d{1,3})$/;   // table first-cell
-  const OPT_CELL_RE = /^([A-D])\s+(.*)/i;  // 'A   text' in a table options row
+  const QNUM_ONLY   = /^[A-Z]{0,5}(\d{1,3})$/;
+  const OPT_CELL_RE = /^([A-D])\s+(.*)/i;
   const ANS_RE      = /^ANSWERS\s*$/i;
-  const MAX_QNUM    = 200;   // ignore numbers > this (e.g. the year "2022")
+  const MAX_QNUM    = 200;
 
-  // ── Essay-document question-label detector ────────────────────────────
-  // Matches bold section headings that begin a NEW question in notes/worksheet
-  // documents that have no standard "1." / "Q1" numbering.
   const ESSAY_Q_LABEL_RE = /^(planning\s+question|practice\s+question|additional\s+question|self[\s-]directed\s+learning)\b/i;
-
-  // ── Answer-section delimiter detector ────────────────────────────────
-  // When a bold-heading paragraph matches this, everything that follows
-  // (until the next question label) is routed to curQ.suggestedAnswerText
-  // instead of the question prompt tokens.
   const ANSWER_SPLIT_RE = /^(suggested\s+answers?|suggested\s+diagram|marking\s+scheme|marking\s+points?|possible\s+answers?(\s*\(\d+\))?|model\s+answers?)\b/i;
 
-  // Parse question number from table first-cell (normalises 'XX23' → '23')
-  // Also strips HTML tags e.g. '<strong>1</strong>' → '1'
   function parseQnum(cell) {
     const clean = (cell || '').replace(/<[^>]+>/g, '').trim();
     const m = QNUM_ONLY.exec(clean);
@@ -1675,7 +1583,6 @@ async function parseDocxToQuestions(file, msAnswers) {
     return null;
   }
 
-  // Deduplicate merged Word table cells
   function dedupCells(cells) {
     const seen = new Set(), parts = [];
     for (const c of cells) {
@@ -1685,21 +1592,15 @@ async function parseDocxToQuestions(file, msAnswers) {
     return parts.join(' ');
   }
 
-  // Extract MCQ option texts from a row like ['', 'A  text', 'B  text', ...]
-  // Also handles bold option letters e.g. ['', '<strong>A</strong>  text', ...]
   function extractOptsFromRow(row) {
     const opts = [];
     for (const cell of row.slice(1)) {
       const t = cell.trim();
       if (!t) continue;
-      // Strip HTML to check for option-letter prefix
       const tPlain = t.replace(/<[^>]+>/g, '');
       const m = OPT_CELL_RE.exec(tPlain);
       if (m) {
-        // Remove leading option letter (possibly HTML-wrapped) from original cell
         let optRaw = t.replace(/^(?:<[^>]+>)*[A-D](?:<\/[^>]+>)*\s*/i, '');
-        // Strip dangling closing tags at start (e.g. '</strong>' when letter
-        // shares an opening tag with the content: '<strong>A </strong>text')
         optRaw = optRaw.replace(/^(\s*<\/[^>]+>)+/, '').trim();
         opts.push(optRaw || m[2].trim());
       }
@@ -1707,31 +1608,28 @@ async function parseDocxToQuestions(file, msAnswers) {
     return opts;
   }
 
-  // NEW: handle rows where cell[0] is empty, cell[1] is exactly A/B/C/D,
-// and cell[2] is the option text (3-column Singapore exam format).
-function extractSplitOptFromRow(row) {
-  const c0 = (row[0] || '').replace(/<[^>]+>/g, '').trim();
-  const c1 = (row[1] || '').replace(/<[^>]+>/g, '').trim();
-  if (c0 === '' && /^[A-D]$/i.test(c1) && row.length >= 3) {
-    // Join remaining cells (from index 2 onwards) as the option text,
-    // skipping any that are just answer-box placeholders like "( )"
-    const optText = row.slice(2)
-      .map(c => c.replace(/<[^>]+>/g, '').trim())
-      .filter(c => c && !/^\(\s*\)$/.test(c))
-      .join(' ');
-    return optText;
+  // ── NEW: handle 3-column format: empty | A/B/C/D | option text ──────
+  // This covers Singapore Biology/Science exam papers where the option
+  // letter sits in its own cell (cell[1]) separate from the option text
+  // (cell[2]), with cell[0] empty. Each A/B/C/D row is a separate <w:tr>.
+  // Also strips trailing answer-box cells like "( )" from the option text.
+  function extractSplitOptFromRow(row) {
+    const c0 = (row[0] || '').replace(/<[^>]+>/g, '').trim();
+    const c1 = (row[1] || '').replace(/<[^>]+>/g, '').trim();
+    if (c0 === '' && /^[A-D]$/i.test(c1) && row.length >= 3) {
+      // Join all cells from index 2 onwards, skipping answer-box placeholders
+      const optText = row.slice(2)
+        .map(c => c.replace(/<[^>]+>/g, '').trim())
+        .filter(c => c && !/^\(\s*\)$/.test(c))
+        .join(' ')
+        .trim();
+      return optText;   // may be empty string for image-only options — caller handles
+    }
+    return null;  // not this format
   }
-  return null;
-}
 
-  // Check if individual paragraphs of a question cell contain embedded A/B/C/D options
-  // as separate paragraphs (common in H1/H2 papers where options follow the stem in
-  // the same table cell, each starting with the option letter).
-  // Returns [optA, optB, optC, optD] or null.
   function extractEmbeddedOpts(paras) {
-    // Need at least 5 paragraphs: ≥1 stem + 4 options
     if (!paras || paras.length < 5) return null;
-    // Collect non-empty paragraphs
     const nonEmpty = paras.filter(p => stripTags(p).replace(/\xa0/g,' ').trim());
     if (nonEmpty.length < 4) return null;
     const last4 = nonEmpty.slice(-4);
@@ -1752,7 +1650,6 @@ function extractSplitOptFromRow(row) {
     return null;
   }
 
-  // Parse inline cloze options like "1 肯定 2 挑选 3 安排 4选择".
   function parseInlineClozeOptions(innerTxt) {
     const matches = [...innerTxt.matchAll(/[1-8]\s*([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9_\- ]*?)(?=\s*[1-8]\s*[\u4e00-\u9fffA-Za-z]|$)/gu)];
     return matches
@@ -1767,8 +1664,6 @@ function extractSplitOptFromRow(row) {
     return text.trim();
   }
 
-  // For consecutive inline cloze MCQs (e.g. Q16-Q20 in one passage),
-  // rebuild each question stem as the full shared passage.
   function normalizeInlineClozeGroups(mcqList) {
     const byNum = new Map();
     for (const q of mcqList) {
@@ -1823,9 +1718,6 @@ function extractSplitOptFromRow(row) {
     }
   }
 
-  // ── Detect transposed options: A B C D appear as column headers ─────
-  // e.g. Row: ['', 'A', 'B', 'C', 'D'] or Row: ['A', 'B', 'C', 'D', ...]
-  // Returns { headerRowIdx, optStartCol } or null.
   function findTransposedOptions(rows) {
     for (let ri = 0; ri < Math.min(rows.length, 4); ri++) {
       const cols = rows[ri].map(c => c.replace(/<[^>]+>/g,'').trim().toUpperCase());
@@ -1838,14 +1730,12 @@ function extractSplitOptFromRow(row) {
     return null;
   }
 
-  // Extract column-wise option images from rows after the header row.
-  // Returns [fnA, fnB, fnC, fnD] (filenames, null if no image found).
   async function extractTransposedOptImages(rows, ci_base, headerRowIdx, tblCellImages) {
     const optImgs = [null, null, null, null];
     for (let ri = headerRowIdx + 1; ri < rows.length; ri++) {
       const rowCells = tblCellImages ? (tblCellImages[ri] || []) : [];
       for (let oi = 0; oi < 4; oi++) {
-        if (optImgs[oi]) continue;          // already found one for this column
+        if (optImgs[oi]) continue;
         const cellRids = rowCells[ci_base + oi] || [];
         if (cellRids.length) {
           optImgs[oi] = await resolveImage(cellRids[0]);
@@ -1861,16 +1751,9 @@ function extractSplitOptFromRow(row) {
   let curQ = null, curOpts = [], curOptImages = [];
   const inlineAnswers = {};
   let inAnswers = false, curAQ = null, curATokens = [];
-  // Counter for DOCX automatic-numbered lists (keyed by "numId:ilvl")
   const numCounter = new Map();
-  // Auto-incrementing counter for label-based questions (Planning Question, etc.)
   let autoQCounter = 1;
-  // True when subsequent content belongs to the suggested answer, not the prompt
   let inSuggestedAnswer = false;
-  // True when curQ was started by a plain-text detector (Q_RE / Q-prefix / essay label).
-  // False when started by Path B numPr decimal.
-  // Used so that decimal-numPr items after a text-detected question are treated as
-  // MCQ options rather than new question starts (handles Chinese Q1/Q2 worksheets).
   let curQFromText = false;
 
   function flushQuestion() {
@@ -1884,7 +1767,6 @@ function extractSplitOptFromRow(row) {
     curQFromText = false;
   }
 
-  // ── Resolve answer: MS file takes priority over inline ANSWERS section ──
   function resolveAnswer(qnum) {
     if (msAnswers[qnum] !== undefined) return msAnswers[qnum];
     if (inlineAnswers[qnum])           return answerToString(inlineAnswers[qnum]);
@@ -1920,13 +1802,12 @@ function extractSplitOptFromRow(row) {
       continue;
     }
 
-    // --- Images attach to current question (skipped if in answer mode — text only) ---
+    // --- Images attach to current question ---
     if (item.type === 'image') {
       if (curQ) {
         const fn = await resolveImage(item.value);
         if (fn) {
           if (inSuggestedAnswer) {
-            // Append a placeholder so the teacher knows a diagram exists
             curQ.suggestedAnswerText = (curQ.suggestedAnswerText || '') + '[diagram]\n';
           } else {
             curQ.tokens.push({ type:'image', value:fn });
@@ -1936,9 +1817,7 @@ function extractSplitOptFromRow(row) {
       continue;
     }
 
-    // --- Tables in answer mode: skip (marking schemes are text-only in the textarea) ---
     if (item.type === 'table' && inSuggestedAnswer) {
-      // Flatten table rows into plain text lines for the suggested answer
       if (curQ) {
         for (const row of (item.value || [])) {
           const line = row.map(c => stripTags(c).replace(/\xa0/g,' ').trim()).filter(Boolean).join(' | ');
@@ -1961,15 +1840,11 @@ function extractSplitOptFromRow(row) {
         curQ    = { qnum: detectedQnum, tokens: [] };
         curOpts = []; curOptImages = [];
 
-        // Check for embedded A/B/C/D options inside the question cell (single-row tables
-        // where each option is a separate paragraph starting with A/B/C/D).
-        // Must be done BEFORE joining cell paragraphs, using the raw cellParas data.
         const qCellParas = item.cellParas && item.cellParas[0]
           ? (item.cellParas[0][rows[0].length - 1] || item.cellParas[0][1] || [])
           : [];
         const embeddedOpts = rows.length === 1 ? extractEmbeddedOpts(qCellParas) : null;
         if (embeddedOpts) {
-          // Build stem text from the paragraphs BEFORE the options
           const nonEmpty = qCellParas.filter(p => stripTags(p).replace(/\xa0/g,' ').trim());
           const stemParas = nonEmpty.slice(0, nonEmpty.length - 4);
           const stemText  = stemParas.join(' ').trim();
@@ -1981,12 +1856,10 @@ function extractSplitOptFromRow(row) {
           if (qText) curQ.tokens.push({ type:'text', value: qText });
         }
 
-        // Check for transposed A/B/C/D column-header format within this table
         const transpHdrQ = findTransposedOptions(rows.slice(1));
         if (transpHdrQ !== null) {
           const { headerRowIdx: hri, optStartCol } = transpHdrQ;
-          const absHri = hri + 1; // offset because we sliced from row 1
-          // Rows between question row and header → stem text
+          const absHri = hri + 1;
           for (let ri = 1; ri < absHri; ri++) {
             const t = dedupCells(rows[ri]);
             if (t) curQ.tokens.push({ type:'text', value: t });
@@ -1995,15 +1868,13 @@ function extractSplitOptFromRow(row) {
           curOptImages = await extractTransposedOptImages(rows, optStartCol, absHri, item.cellImages);
         } else
 
-        // Use indexed loop so we can look up rowImages[ri] for option images
         for (let ri = 1; ri < rows.length; ri++) {
           const row     = rows[ri];
           const r0      = (row[0] || '').trim();
-          const r0plain = r0.replace(/<[^>]+>/g, '').trim(); // strip HTML for detection
+          const r0plain = r0.replace(/<[^>]+>/g, '').trim();
           const subQnum = parseQnum(r0);
 
           if (subQnum !== null) {
-            // ── New question embedded inside this table (e.g. Q25 inside Q24's table) ──
             flushQuestion();
             curQ    = { qnum: subQnum, tokens: [] };
             curOpts = []; curOptImages = [];
@@ -2011,90 +1882,32 @@ function extractSplitOptFromRow(row) {
             if (qText2) curQ.tokens.push({ type:'text', value: qText2 });
 
           } else if (/^[A-D]$/i.test(r0plain)) {
-            // MCQ option row where the letter IS the first cell
-            // e.g. ['A', '10–6', '10–9', '10–12']  or  ['A', '(image)']
+            // Path 2: first cell is exactly A/B/C/D
             const optText = dedupCells(row.slice(1));
-            // Always push even if text is empty (image-only options like diagrams A/B/C/D)
             curOpts.push(optText || '');
-            // Capture the first image in this option row (if any)
             const optRids = item.rowImages ? (item.rowImages[ri] || []) : [];
             const optFn   = optRids.length ? await resolveImage(optRids[0]) : null;
             curOptImages.push(optFn);
 
-         } else if (!r0) {
-  // NEW: check for split format first (empty | A | option text)
-  const splitOpt = extractSplitOptFromRow(row);
-  if (splitOpt !== null) {
-    curOpts.push(splitOpt);
-    // Check for image in cell[2] onwards for this row
-    const optRids = item.cellImages && item.cellImages[ri]
-      ? (item.cellImages[ri].slice(2).flat()) : [];
-    const optFn = optRids.length ? await resolveImage(optRids[0]) : null;
-    curOptImages.push(optFn);
-  } else {
-    const opts = extractOptsFromRow(row);
-    if (opts.length >= 2) {
-      curOpts.push(...opts);
-      // No per-option images for this format (letter embedded in cell text)
-      for (let k = 0; k < opts.length; k++) curOptImages.push(null);
-    } else {
-      // Check for image-only options where each cell is just 'A','B','C','D'
-              // (e.g. Q5-style: ['','A','B','C','D'] with raster images per cell)
-              const optSlice   = row.slice(1).filter(c => c.replace(/<[^>]+>/g,'').trim());
-              const allLetters = optSlice.length >= 2 &&
-                optSlice.every(c => /^[A-D]$/i.test(c.replace(/<[^>]+>/g,'').trim()));
-              if (allLetters) {
-                // Each non-empty cell is an image-only option; look up image per cell column
-                for (let ci = 0; ci < row.length - 1; ci++) {
-                  const c = row[ci + 1];
-                  if (!c.replace(/<[^>]+>/g,'').trim()) continue;
-                  curOpts.push('');
-                  const cellRids = item.cellImages && item.cellImages[ri]
-                    ? (item.cellImages[ri][ci + 1] || []) : [];
-                  const optFn = cellRids.length ? await resolveImage(cellRids[0]) : null;
-                  curOptImages.push(optFn);
-                }
-              } else {
-                const extra = dedupCells(row);
-                if (extra) curQ.tokens.push({ type:'text', value: extra });
-              }
-            }
-          } else {
-            const extra = dedupCells(row);
-            if (extra) curQ.tokens.push({ type:'text', value: extra });
-          }
-        }
-      }
-    }else if (curQ) {
-        // ── Continuation table — detect A/B/C/D option rows OR transposed format ──
-        const transpHdr = findTransposedOptions(rows);
-        if (transpHdr !== null && !curOpts.length) {
-          // Transposed format: A B C D appear as column headers.
-          // Collect images column-wise; row labels before header go to stem text.
-          const { headerRowIdx, optStartCol } = transpHdr;
-          for (let ri = 0; ri < headerRowIdx; ri++) {
-            const t = dedupCells(rows[ri]);
-            if (t) curQ.tokens.push({ type:'text', value: t });
-          }
-          curOpts = ['', '', '', ''];
-          curOptImages = await extractTransposedOptImages(rows, optStartCol, headerRowIdx, item.cellImages);
-        } else {
-          for (let ri = 0; ri < rows.length; ri++) {
-            const row     = rows[ri];
-            const r0plain = (row[0] || '').replace(/<[^>]+>/g, '').trim();
-            if (/^[A-D]$/i.test(r0plain)) {
-              const optText = dedupCells(row.slice(1));
-              curOpts.push(optText || '');
-              const optRids = item.rowImages ? (item.rowImages[ri] || []) : [];
-              const optFn   = optRids.length ? await resolveImage(optRids[0]) : null;
+          } else if (!r0plain) {
+            // First cell is empty — try split format first, then OPT_CELL_RE, then image-only
+            // ── NEW Path 6: empty | A/B/C/D | option text (3-column split) ──
+            const splitOpt = extractSplitOptFromRow(row);
+            if (splitOpt !== null) {
+              curOpts.push(splitOpt);
+              // Look for an image in cell[2] onwards for this option row
+              const cellRidsForOpt = item.cellImages && item.cellImages[ri]
+                ? item.cellImages[ri].slice(2).flat()
+                : [];
+              const optFn = cellRidsForOpt.length ? await resolveImage(cellRidsForOpt[0]) : null;
               curOptImages.push(optFn);
-            } else if (!r0plain) {
+            } else {
               const opts = extractOptsFromRow(row);
               if (opts.length >= 2) {
                 curOpts.push(...opts);
                 for (let k = 0; k < opts.length; k++) curOptImages.push(null);
               } else {
-                // Image-only option cells (single letters A/B/C/D with images)
+                // Check for image-only options where each cell is just 'A','B','C','D'
                 const optSlice   = row.slice(1).filter(c => c.replace(/<[^>]+>/g,'').trim());
                 const allLetters = optSlice.length >= 2 &&
                   optSlice.every(c => /^[A-D]$/i.test(c.replace(/<[^>]+>/g,'').trim()));
@@ -2109,8 +1922,72 @@ function extractSplitOptFromRow(row) {
                     curOptImages.push(optFn);
                   }
                 } else {
-                  const t = dedupCells(row);
-                  if (t) curQ.tokens.push({ type:'text', value: t });
+                  const extra = dedupCells(row);
+                  if (extra) curQ.tokens.push({ type:'text', value: extra });
+                }
+              }
+            }
+          } else {
+            const extra = dedupCells(row);
+            if (extra) curQ.tokens.push({ type:'text', value: extra });
+          }
+        }
+      } else if (curQ) {
+        // ── Continuation table ──
+        const transpHdr = findTransposedOptions(rows);
+        if (transpHdr !== null && !curOpts.length) {
+          const { headerRowIdx, optStartCol } = transpHdr;
+          for (let ri = 0; ri < headerRowIdx; ri++) {
+            const t = dedupCells(rows[ri]);
+            if (t) curQ.tokens.push({ type:'text', value: t });
+          }
+          curOpts = ['', '', '', ''];
+          curOptImages = await extractTransposedOptImages(rows, optStartCol, headerRowIdx, item.cellImages);
+        } else {
+          for (let ri = 0; ri < rows.length; ri++) {
+            const row     = rows[ri];
+            const r0plain = (row[0] || '').replace(/<[^>]+>/g, '').trim();
+            if (/^[A-D]$/i.test(r0plain)) {
+              // Path 2: first cell exactly A/B/C/D
+              const optText = dedupCells(row.slice(1));
+              curOpts.push(optText || '');
+              const optRids = item.rowImages ? (item.rowImages[ri] || []) : [];
+              const optFn   = optRids.length ? await resolveImage(optRids[0]) : null;
+              curOptImages.push(optFn);
+            } else if (!r0plain) {
+              // First cell is empty — try split format first, then OPT_CELL_RE, then image-only
+              // ── NEW Path 6 (continuation table): empty | A/B/C/D | option text ──
+              const splitOpt = extractSplitOptFromRow(row);
+              if (splitOpt !== null) {
+                curOpts.push(splitOpt);
+                const cellRidsForOpt = item.cellImages && item.cellImages[ri]
+                  ? item.cellImages[ri].slice(2).flat()
+                  : [];
+                const optFn = cellRidsForOpt.length ? await resolveImage(cellRidsForOpt[0]) : null;
+                curOptImages.push(optFn);
+              } else {
+                const opts = extractOptsFromRow(row);
+                if (opts.length >= 2) {
+                  curOpts.push(...opts);
+                  for (let k = 0; k < opts.length; k++) curOptImages.push(null);
+                } else {
+                  const optSlice   = row.slice(1).filter(c => c.replace(/<[^>]+>/g,'').trim());
+                  const allLetters = optSlice.length >= 2 &&
+                    optSlice.every(c => /^[A-D]$/i.test(c.replace(/<[^>]+>/g,'').trim()));
+                  if (allLetters) {
+                    for (let ci = 0; ci < row.length - 1; ci++) {
+                      const c = row[ci + 1];
+                      if (!c.replace(/<[^>]+>/g,'').trim()) continue;
+                      curOpts.push('');
+                      const cellRids = item.cellImages && item.cellImages[ri]
+                        ? (item.cellImages[ri][ci + 1] || []) : [];
+                      const optFn = cellRids.length ? await resolveImage(cellRids[0]) : null;
+                      curOptImages.push(optFn);
+                    }
+                  } else {
+                    const t = dedupCells(row);
+                    if (t) curQ.tokens.push({ type:'text', value: t });
+                  }
                 }
               }
             } else {
@@ -2129,24 +2006,17 @@ function extractSplitOptFromRow(row) {
                                 .replace(/\s+/g,' ').trim();
 
     if (ANS_RE.test(plain)) { inAnswers = true; continue; }
-    if (!plain && !item.numPr) continue;   // skip truly empty paragraphs
+    if (!plain && !item.numPr) continue;
 
-    // ── Essay-label question detection (e.g. "Planning Question (Example 1)") ──
-    // Only triggers when no numeric Q_RE match exists, so it never conflicts
-    // with standard numbered exam papers.
     if (plain && ESSAY_Q_LABEL_RE.test(plain)) {
-      flushQuestion();                  // saves previous Q + resets inSuggestedAnswer
+      flushQuestion();
       curQ    = { qnum: String(autoQCounter++), tokens: [], suggestedAnswerText: '' };
       curOpts = []; curOptImages = [];
       curQFromText = true;
-      // The label text (e.g. "Planning Question (Example 1)") becomes the first token
       curQ.tokens.push({ type: 'text', value: raw });
       continue;
     }
 
-    // ── Path A: plain-text question number in the text itself ────────────
-    // MUST come before inSuggestedAnswer routing: a new numbered question always
-    // terminates the previous answer section (flushQuestion resets the flag).
     if (plain) {
       if (curQ) {
         const earlyOptMatch = plain.match(OPT_RE);
@@ -2157,13 +2027,11 @@ function extractSplitOptFromRow(row) {
         }
       }
 
-      // Question-start variant like "2(a)Write ...". We treat this as a new
-      // top-level question (qnum=2) and keep "(a) ..." in the stem text.
       const qSubMatch = plain.match(Q_SUBSTART_RE);
       if (qSubMatch && parseInt(qSubMatch[1]) <= MAX_QNUM) {
         const qnum = qSubMatch[1];
         const qbody = `(${qSubMatch[2]}) ${qSubMatch[3] || ''}`.trim();
-        flushQuestion();           // resets inSuggestedAnswer
+        flushQuestion();
         curQ    = { qnum, tokens: [] };
         curOpts = []; curOptImages = [];
         curQFromText = true;
@@ -2173,18 +2041,13 @@ function extractSplitOptFromRow(row) {
 
       const qMatch = plain.match(Q_RE);
       if (qMatch) {
-        // Group layout: Q-prefix "Q1 text" → groups [1]=num
-        //               paren-style "(1) text" → groups [2]=num
-        //               full-width paren "（1） text" → groups [3]=num
-        //               regular "1. text" → groups [4]=num
         const qnum = qMatch[1] || qMatch[2] || qMatch[3] || qMatch[4];
         const qtext = qMatch[5];
         if (parseInt(qnum) <= MAX_QNUM) {
-          flushQuestion();           // resets inSuggestedAnswer
+          flushQuestion();
           curQ    = { qnum, tokens: [] };
           curOpts = []; curOptImages = [];
           curQFromText = true;
-          // Strip the leading "Q1." / "Q1)" / "(1)" / "（1）」 / "1." from raw HTML, keep rest
           const bodyText = raw.replace(/^(?:<[^>]*>)*(?:[Qq]\d+(?:[\.\)\s:]*\s+)?|\(\d+\)|（\d+）|\d+[.)])(?:<\/[^>]*>)*\s*/,'').trim()
                         || raw.replace(/^(?:<[^>]*>)*[Qq]?\d+(?:<\/[^>]*>)*\s+/,'').trim()
                         || qtext;
@@ -2193,8 +2056,6 @@ function extractSplitOptFromRow(row) {
         }
       }
 
-      // Inline Q-prefix for fill-in-the-blank style questions (e.g. Q16(...) or conversational Q26？)
-      // Make sure it's not matching instruction ranges like "Q1-Q2"
       const rangeMatch = plain.match(/[Qq]\d+\s*[-－到至\u2013\u2014]\s*[Qq]\d+/);
       const inlineQMatch = plain.match(/(?:^|[^A-Za-z0-9])[Qq](\d{1,3})(?:[^A-Za-z0-9]|$)/);
       
@@ -2203,11 +2064,8 @@ function extractSplitOptFromRow(row) {
           curQ = { qnum: inlineQMatch[1], tokens: [] };
           curOpts = []; curOptImages = [];
           curQFromText = true;
-          // Keep whole paragraph context for the inline question
           curQ.tokens.push({ type: 'text', value: raw });
 
-          // Try to extract inline options: e.g. Q16（1 肯定 2 挑选 3 安排 4选择）
-          // Handles both "1 word" (space) and "1word" (no space) formats.
           const clozeMatch = plain.match(/[Qq]\d{1,3}\s*[（(]([^）)]+)[）)]/u);
           if (clozeMatch) {
               const innerTxt = clozeMatch[1].trim();
@@ -2217,9 +2075,6 @@ function extractSplitOptFromRow(row) {
                      curOpts.push(o);
                      curOptImages.push(null);
                   }
-                  // Replace the option list in the stem with a clean blank so students
-                  // see the sentence context rather than the raw options list.
-                  // e.g. "Q16（1 肯定 2 挑选 3 安排 4选择）" → "______"
                   const stemRaw = raw.replace(/[Qq]\d{1,3}\s*[（(][^）)]*[）)]/u, '______');
                   curQ.tokens[curQ.tokens.length - 1] = { type: 'text', value: stemRaw };
               }
@@ -2228,42 +2083,30 @@ function extractSplitOptFromRow(row) {
       }
     }
 
-    // ── Answer-section delimiter (e.g. "Suggested Answer", "Marking Scheme") ──
-    // Everything after this heading goes into curQ.suggestedAnswerText.
     if (plain && ANSWER_SPLIT_RE.test(plain) && curQ && !inSuggestedAnswer) {
       inSuggestedAnswer = true;
-      // Don't add the heading itself to either the prompt or the answer
       continue;
     }
 
-    // Skip plain "Options"/"Choices" headers and standalone A/B/C/D labels
-    // that appear after the detected options list in some Chinese paper layouts.
     if (plain && curQ) {
       if (OPTIONS_HEADER_RE.test(plain)) continue;
       if (curOpts.length > 0 && STANDALONE_OPTION_LABEL_RE.test(plain)) continue;
     }
 
-    // ── Route content to suggestedAnswerText when in answer mode ────────
     if (inSuggestedAnswer && curQ) {
       if (plain) curQ.suggestedAnswerText = (curQ.suggestedAnswerText || '') + plain + '\n';
       continue;
     }
 
-    // ── OPT_RE — only fires when NOT in answer mode ──────────────────────
     if (plain) {
       const optMatch = plain.match(OPT_RE);
       if (optMatch && curQ) {
         curOpts.push(optMatch[1] ?? '');
-        curOptImages.push(null);   // no image for paragraph-based options
+        curOptImages.push(null);
         continue;
       }
     }
 
-    // ── Path B: DOCX automatic list numbering — label not in <w:t> text ─
-    // When Word generates "1." / "a." from <w:numPr>, the <w:t> holds only
-    // the bare content.  We look up the list format from numbering.xml:
-    //   decimal / decimalZero → question stem  (auto-number it)
-    //   lowerLetter / upperLetter / lowerRoman → MCQ option
     if (item.numPr) {
       const { numId, ilvl } = item.numPr;
       const lvlMap = numFormatMap.get(numId);
@@ -2272,12 +2115,9 @@ function extractSplitOptFromRow(row) {
 
       if (/^decimal/i.test(fmt) && plain) {
         if (curQFromText && curQ) {
-          // Question stem was detected from plain text (e.g. "Q1 …") — treat
-          // decimal-numPr items as MCQ options (Chinese worksheet style).
           curOpts.push(plain);
           curOptImages.push(null);
         } else {
-          // Auto-numbered question stem (standard exam auto-list style)
           numCounter.set(cKey, (numCounter.get(cKey) || 0) + 1);
           const autoQnum = String(numCounter.get(cKey));
           flushQuestion();
@@ -2290,7 +2130,6 @@ function extractSplitOptFromRow(row) {
       }
 
       if (/letter|roman/i.test(fmt) && curQ) {
-        // Auto-lettered MCQ option
         curOpts.push(plain);
         curOptImages.push(null);
         continue;
@@ -2313,7 +2152,7 @@ function extractSplitOptFromRow(row) {
       '• OR start with a bold label: "Planning Question", "Practice Question", "Additional question"'
     );
 
-  // ── Merge, deduplicate, sort — MCQ wins over structured for same qnum ──
+  // ── Merge, deduplicate, sort ──
   const qByNum = new Map();
   for (const q of mcq)        qByNum.set(q.qnum, { isMcq: true,  q });
   for (const q of structured) if (!qByNum.has(q.qnum)) qByNum.set(q.qnum, { isMcq: false, q });
@@ -2323,13 +2162,10 @@ function extractSplitOptFromRow(row) {
     .map(({ isMcq, q }) => ({
       isMcq,
       q,
-      // suggestedAnswerText (auto-extracted from doc) takes priority over MS file / inline answers
       answer: q.suggestedAnswerText || resolveAnswer(q.qnum)
     }));
 
-  // Safety pass: if an item was parsed as Essay but contains inline cloze
-  // syntax (e.g. "Q16（1 ... 2 ... 3 ... 4 ...）"), auto-promote it to MCQ
-  // so the editor shows Options A/B/C/D and a correct-answer selector.
+  // Safety pass: promote essay inline-cloze to MCQ
   for (const entry of allQuestions) {
     if (entry.isMcq) continue;
     const stemPlain = (entry.q.tokens || [])
@@ -2355,7 +2191,7 @@ function extractSplitOptFromRow(row) {
   return { allQuestions, resolvedImages };
 }
 
-// ── Phase 2: build the QTI ZIP from (possibly edited) question data ──────────
+// ── Phase 2: build the QTI ZIP ──────────────────────────────────────────────
 async function buildQtiZipBlob(allQuestions, resolvedImages) {
   const outZip    = new JSZip();
   const itemsDir  = outZip.folder('items');
@@ -2417,12 +2253,9 @@ async function buildQtiZipBlob(allQuestions, resolvedImages) {
 // Review & Edit editor
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Global editor state ─────────────────────────────────────────────────────────
-let editorState = null;   // { allQuestions, resolvedImages, imageUrls, baseName }
+let editorState = null;
 
-// Render the full editor after a successful parse ─────────────────────────────
 function renderEditor(allQuestions, resolvedImages, baseName) {
-  // Create in-memory blob URLs so we can display images without a server
   const imageUrls = {};
   for (const { filename, data } of Object.values(resolvedImages)) {
     const mime = filename.endsWith('.png') ? 'image/png'
@@ -2433,22 +2266,18 @@ function renderEditor(allQuestions, resolvedImages, baseName) {
 
   editorState = { allQuestions, resolvedImages, imageUrls, baseName };
 
-  // Populate cards
   const container = document.getElementById('questionCards');
   container.innerHTML = '';
   allQuestions.forEach((entry, idx) => container.appendChild(buildCard(entry, imageUrls, idx)));
 
-  // Update count badge
   document.getElementById('editorQCount').textContent =
     `${allQuestions.length} question${allQuestions.length !== 1 ? 's' : ''}`;
 
-  // Show section and smoothly scroll to it
   const sec = document.getElementById('editorSection');
   sec.style.display = 'block';
   setTimeout(() => sec.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
 }
 
-// Build one question card ──────────────────────────────────────────────────────
 function buildCard(entry, imageUrls, idx) {
   const { isMcq, q, answer } = entry;
 
@@ -2456,7 +2285,6 @@ function buildCard(entry, imageUrls, idx) {
   card.className = 'q-card';
   card.dataset.idx = idx;
 
-  // ── Header ──────────────────────────────────────────────────────────
   const hdr = document.createElement('div');
   hdr.className = 'q-card-header';
   hdr.innerHTML = `
@@ -2464,7 +2292,6 @@ function buildCard(entry, imageUrls, idx) {
     <span class="q-type-badge ${isMcq ? 'mcq' : 'essay'}" title="Click to toggle MCQ / Essay">${isMcq ? 'MCQ' : 'Essay'}</span>`;
   card.appendChild(hdr);
 
-  // Type-toggle: clicking the badge swaps MCQ ↔ Essay and rebuilds the card
   hdr.querySelector('.q-type-badge').addEventListener('click', () => {
     const e = editorState.allQuestions[idx];
     e.isMcq = !e.isMcq;
@@ -2475,7 +2302,6 @@ function buildCard(entry, imageUrls, idx) {
     card.replaceWith(buildCard(e, editorState.imageUrls, idx));
   });
 
-  // ── Stem ────────────────────────────────────────────────────────────
   const stemWrap = document.createElement('div');
   stemWrap.className = 'q-stem';
 
@@ -2486,7 +2312,6 @@ function buildCard(entry, imageUrls, idx) {
       d.contentEditable = 'true';
       d.setAttribute('data-ph', 'Question stem…');
       d.setAttribute('data-token-idx', ti);
-      // Set as HTML so formatting tags (strong/sup/sub) render correctly
       d.innerHTML = safeHtml(token.value);
       stemWrap.appendChild(d);
 
@@ -2516,7 +2341,6 @@ function buildCard(entry, imageUrls, idx) {
   });
   card.appendChild(stemWrap);
 
-  // ── Options (MCQ only) ───────────────────────────────────────────────
   if (isMcq && q.options && q.options.length) {
     const optsLabel = document.createElement('div');
     optsLabel.className = 'q-opts-label';
@@ -2538,7 +2362,6 @@ function buildCard(entry, imageUrls, idx) {
       lbl.style.marginTop = '6px';
       row.appendChild(lbl);
 
-      // Option may have an image (diagram), text, or both
       const optImgFn = q.optionImages && q.optionImages[oi];
       const wrap = document.createElement('div');
       wrap.style.flex = '1';
@@ -2551,12 +2374,10 @@ function buildCard(entry, imageUrls, idx) {
         wrap.appendChild(img);
       }
 
-      // Use a contentEditable div so <sup>/<sub>/<strong>/<em> formatting
-      // in option text is preserved through the editor round-trip.
       const inp = document.createElement('div');
       inp.contentEditable = 'true';
       inp.className = 'opt-input';
-      inp.innerHTML = opt;          // render HTML formatting, not plain text
+      inp.innerHTML = opt;
       inp.setAttribute('data-opt-idx', oi);
       inp.style.marginTop = optImgFn ? '4px' : '0';
       wrap.appendChild(inp);
@@ -2566,7 +2387,6 @@ function buildCard(entry, imageUrls, idx) {
     });
     card.appendChild(optsWrap);
 
-    // ── Correct answer selector ────────────────────────────────────────
     const ansRow = document.createElement('div');
     ansRow.className = 'q-answer-row';
     ansRow.innerHTML = `<span>✓ Correct answer:</span>`;
@@ -2578,8 +2398,6 @@ function buildCard(entry, imageUrls, idx) {
         `<option value="${l}" ${answer === l ? 'selected' : ''}>${l.toUpperCase()}</option>`
       ).join('');
 
-    // Highlight correct-option letter badge immediately and on change.
-    // Also toggle amber border on the card when no answer is selected.
     const syncLabels = () => {
       optsWrap.querySelectorAll('.opt-letter').forEach(lbl => {
         lbl.classList.toggle('is-correct', lbl.textContent.toLowerCase() === sel.value);
@@ -2593,7 +2411,6 @@ function buildCard(entry, imageUrls, idx) {
     card.appendChild(ansRow);
 
   } else {
-    // ── Essay suggested answer field ─────────────────────────────────────
     const ansLabel = document.createElement('div');
     ansLabel.className = 'q-essay-answer-label';
     ansLabel.textContent = '✏ Suggested answer (optional — injected into QTI export):';
@@ -2609,7 +2426,6 @@ function buildCard(entry, imageUrls, idx) {
   return card;
 }
 
-// Read back edited state from DOM into a new allQuestions array ───────────────
 function readEditorState() {
   const cards = document.querySelectorAll('#questionCards .q-card');
   return editorState.allQuestions.map((entry, idx) => {
@@ -2618,7 +2434,6 @@ function readEditorState() {
 
     const { isMcq, q } = entry;
 
-    // Re-build tokens: update text tokens from contenteditable divs; keep others
     const newTokens = q.tokens.map((token, ti) => {
       if (token.type !== 'text') return token;
       const el = card.querySelector(`.stem-text[data-token-idx="${ti}"]`);
@@ -2627,13 +2442,10 @@ function readEditorState() {
 
     const newQ = { ...q, tokens: newTokens };
 
-    // MCQ: read option inputs + answer select
-    // Essay: read suggested answer textarea
     let newAnswer = entry.answer;
     if (isMcq) {
       newQ.options = q.options.map((opt, oi) => {
         const el = card.querySelector(`.opt-input[data-opt-idx="${oi}"]`);
-        // contentEditable div → read innerHTML to preserve <sup>/<sub> formatting
         return el ? el.innerHTML : opt;
       });
       const sel = card.querySelector('.answer-select');
@@ -2647,30 +2459,25 @@ function readEditorState() {
   });
 }
 
-// "Set unanswered MCQ → A" checkbox ──────────────────────────────────────────
 document.getElementById('setAllAChk').addEventListener('change', function () {
   if (!this.checked) return;
-  // Find every MCQ answer-select that has no answer chosen (value === '')
   const selects = document.querySelectorAll('#questionCards .answer-select');
   let count = 0;
   selects.forEach(sel => {
     if (sel.value === '') {
       sel.value = 'a';
-      sel.dispatchEvent(new Event('change'));   // trigger highlight update
+      sel.dispatchEvent(new Event('change'));
       count++;
     }
   });
-  // Uncheck immediately so it acts as a one-shot action button
   this.checked = false;
   if (count === 0) alert('All MCQ questions already have an answer selected.');
 });
 
-// Export button ───────────────────────────────────────────────────────────────
 document.getElementById('exportBtn').addEventListener('click', async () => {
   if (!editorState) return;
   const btn = document.getElementById('exportBtn');
 
-  // ── Guard: every MCQ question must have a correct answer selected ──────
   const edited = readEditorState();
   const missing = edited.filter(e => e.isMcq && !e.answer);
   if (missing.length) {
@@ -2679,10 +2486,9 @@ document.getElementById('exportBtn').addEventListener('click', async () => {
       `⚠ Please select the correct answer for ${missing.length === 1 ? 'question' : 'questions'}: `
       + `<strong>${qNums}</strong> before exporting. `
       + `(Look for the <span style="color:#d97706">amber-bordered</span> cards above.)`);
-    // Scroll to the first card that has no answer
     const firstCard = document.querySelector('#questionCards .q-card.no-answer');
     if (firstCard) firstCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    return;   // do NOT proceed with export
+    return;
   }
 
   btn.disabled = true;
@@ -2699,9 +2505,7 @@ document.getElementById('exportBtn').addEventListener('click', async () => {
   }
 });
 
-// Reset button — hide editor and let user upload a new file ──────────────────
 document.getElementById('resetBtn').addEventListener('click', () => {
-  // Revoke blob URLs to free memory
   if (editorState) {
     for (const url of Object.values(editorState.imageUrls)) URL.revokeObjectURL(url);
     editorState = null;
@@ -2709,7 +2513,6 @@ document.getElementById('resetBtn').addEventListener('click', () => {
   document.getElementById('editorSection').style.display = 'none';
   document.getElementById('questionCards').innerHTML = '';
   document.getElementById('message').innerHTML = '';
-  // Reset upload zones
   selectedFile = null; selectedMsFile = null;
   fileNameEl.textContent = ''; msFileNameEl.textContent = '';
   dropZone.classList.remove('has-file');
