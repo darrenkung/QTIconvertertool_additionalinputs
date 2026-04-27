@@ -1095,6 +1095,7 @@ async function parseMarkScheme(msFile) {
         if (mQ) {
           const qnStr = mQ[1];
           let foundAns = false;
+          
           // Check right cell (column-style)
           if (c + 1 < table[r].length) {
             const right = (table[r][c+1] || '').trim().toUpperCase();
@@ -1107,6 +1108,7 @@ async function parseMarkScheme(msFile) {
               foundAns = true;
             }
           }
+          
           // Check bottom cell (row-style) 
           // Only check bottom if we didn't find a clean right answer, or if we want to catch alternating rows
           if (!foundAns && r + 1 < table.length) {
@@ -1133,6 +1135,7 @@ async function parseMarkScheme(msFile) {
   for (const p of paras) {
     const pt = Array.from(p.getElementsByTagNameNS(W, 't')).map(t => t.textContent).join('').trim();
     if (!pt) continue;
+    
     // Matches Q34. Q34: Q34 or 34. 34: (Requires punctuation if no Q is present)
     let qnum = null;
     let ansText = "";
@@ -1146,7 +1149,6 @@ async function parseMarkScheme(msFile) {
       const cleanAns = ansText.toUpperCase().replace(/\./g, '').trim();
       if (/^[ABCD]$/.test(cleanAns)) { ansText = cleanAns.toLowerCase(); isMcq = true; }
       else if (/^[1234]$/.test(cleanAns)) { ansText = String.fromCharCode(96 + parseInt(cleanAns)); isMcq = true; }
-
       // Protect existing single-letter MCQ answers from being overwritten by false paragraph hits
       if (answers[qnum] && /^[a-d]$/.test(answers[qnum])) {
          if (isMcq) answers[qnum] = ansText;
@@ -1200,7 +1202,7 @@ function* iterBlockItems(body) {
       }
 
       const parts = [];
-      
+
       // Skip runs that are inside <w:drawing> or <w:pict> (canvas/shape label text,
       // not part of the readable paragraph flow).
       const drawingRunSet = new Set();
@@ -1210,6 +1212,7 @@ function* iterBlockItems(body) {
       for (const el of child.getElementsByTagNameNS(W,'pict')) {
         for (const r of el.getElementsByTagNameNS(W,'r')) drawingRunSet.add(r);
       }
+      
       // Dictionary to map legacy Singapore HYPY font ASCII keys to Unicode Pinyin
       const hypyMap = {
         'C': 'ǎ', 'H': 'ǐ', 'K': 'ē', 'N': 'è', 'P': 'ē', 'Q': 'ó', 'S': 'è',
@@ -1222,8 +1225,7 @@ function* iterBlockItems(body) {
       }
 
       for (const run of child.getElementsByTagNameNS(W,'r')) {
-        if (drawingRunSet.has(run)) continue;
-        // skip diagram/shape label text
+        if (drawingRunSet.has(run)) continue;  // skip diagram/shape label text
         // Skip deleted-text runs
         if (run.getElementsByTagNameNS(W,'del').length) continue;
         // OLE MathType/object runs often have no text payload.
@@ -1483,7 +1485,7 @@ function essayItemXml(q, answerText) {
     ? `\n<outcomeDeclaration identifier="FEEDBACK" cardinality="single" baseType="identifier"/>`
     : '';
 
-  // <rubricBlock view="scorer"> — QTI standard marking-guide panel shown to scorers
+  // <rubricBlock view="scorer"> — QTI standard marking-guide panel shown to scorers.
   const rubricEl = hasAnswer
     ? `\n  <rubricBlock view="scorer"><p>${escXml(answerText)}</p></rubricBlock>`
     : '';
@@ -1551,7 +1553,7 @@ async function parseDocxToQuestions(file, msAnswers) {
     const escapeHTML = str => str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const rtSafe = escapeHTML(rtText);
     const baseSafe = escapeHTML(baseText);
-   
+    
     // Create a fake <w:r> containing the generated HTML inside <w:t>
     const fakeR = xmlDoc.createElementNS(W, 'w:r');
     const fakeT = xmlDoc.createElementNS(W, 'w:t');
@@ -1646,13 +1648,16 @@ async function parseDocxToQuestions(file, msAnswers) {
   const INLINE_CLOZE_RE = /[Qq](\d{1,3})\s*[（(]([^）)]*)[）)]/u;
   const SECTION_HEADING_RE = /[一二三四五六七八九十]+、/u;
   // Allow up to 5 uppercase-letter prefix (Word cross-ref codes like "XX23")
-  const QNUM_ONLY   = /^[A-Z]{0,5}(\d{1,3})$/;
-  const OPT_CELL_RE = /^([A-D])\s+(.*)/i;
+  const QNUM_ONLY   = /^[A-Z]{0,5}(\d{1,3})$/;   // table first-cell
+  const OPT_CELL_RE = /^([A-D])\s+(.*)/i;  // 'A   text' in a table options row
   const ANS_RE      = /^ANSWERS\s*$/i;
   const MAX_QNUM    = 200;  // ignore numbers > this (e.g. the year "2022")
 
+  // ── Essay-document question-label detector ────────────────────────────
+  // Matches bold section headings that begin a NEW question in notes/worksheet
+  // documents that have no standard "1." / "Q1" numbering.
   const ESSAY_Q_LABEL_RE = /^(planning\s+question|practice\s+question|additional\s+question|self[\s-]directed\s+learning)\b/i;
-  
+
   // ── Answer-section delimiter detector ────────────────────────────────
   // When a bold-heading paragraph matches this, everything that follows
   // (until the next question label) is routed to curQ.suggestedAnswerText
@@ -1743,7 +1748,7 @@ async function parseDocxToQuestions(file, msAnswers) {
     if (opts.every(opt => opt !== null)) return opts;
     return null;
   }
-  
+
   // Parse inline cloze options like "1 肯定 2 挑选 3 安排 4选择".
   function parseInlineClozeOptions(innerTxt) {
     const matches = [...innerTxt.matchAll(/[1-8]\s*([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9_\- ]*?)(?=\s*[1-8]\s*[\u4e00-\u9fffA-Za-z]|$)/gu)];
@@ -1814,7 +1819,7 @@ async function parseDocxToQuestions(file, msAnswers) {
       }
     }
   }
- 
+
   // ── Detect transposed options: A B C D appear as column headers ─────
   // e.g. Row: ['', 'A', 'B', 'C', 'D'] or Row: ['A', 'B', 'C', 'D', ...]
   // Returns { headerRowIdx, optStartCol } or null.
@@ -2232,7 +2237,7 @@ async function parseDocxToQuestions(file, msAnswers) {
           continue;
       }
     }
-    
+
     // ── Answer-section delimiter (e.g. "Suggested Answer", "Marking Scheme") ──
     // Everything after this heading goes into curQ.suggestedAnswerText.
     if (plain && ANSWER_SPLIT_RE.test(plain) && curQ && !inSuggestedAnswer) {
