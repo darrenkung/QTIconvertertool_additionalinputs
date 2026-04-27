@@ -1229,7 +1229,7 @@ function* iterBlockItems(body) {
         if (drawingRunSet.has(run)) continue;  // skip diagram/shape label text
         // Skip deleted-text runs
         if (run.getElementsByTagNameNS(W,'del').length) continue;
-        
+
         // OLE MathType/object runs often have no text payload.
         // Emit a LaTeX placeholder so SLS can still render math text context.
         if (run.getElementsByTagNameNS(W,'object').length) {
