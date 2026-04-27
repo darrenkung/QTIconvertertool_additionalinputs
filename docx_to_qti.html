@@ -1095,7 +1095,7 @@ async function parseMarkScheme(msFile) {
         if (mQ) {
           const qnStr = mQ[1];
           let foundAns = false;
-          
+
           // Check right cell (column-style)
           if (c + 1 < table[r].length) {
             const right = (table[r][c+1] || '').trim().toUpperCase();
@@ -1108,7 +1108,7 @@ async function parseMarkScheme(msFile) {
               foundAns = true;
             }
           }
-          
+
           // Check bottom cell (row-style) 
           // Only check bottom if we didn't find a clean right answer, or if we want to catch alternating rows
           if (!foundAns && r + 1 < table.length) {
@@ -1135,7 +1135,7 @@ async function parseMarkScheme(msFile) {
   for (const p of paras) {
     const pt = Array.from(p.getElementsByTagNameNS(W, 't')).map(t => t.textContent).join('').trim();
     if (!pt) continue;
-    
+
     // Matches Q34. Q34: Q34 or 34. 34: (Requires punctuation if no Q is present)
     let qnum = null;
     let ansText = "";
@@ -1149,6 +1149,7 @@ async function parseMarkScheme(msFile) {
       const cleanAns = ansText.toUpperCase().replace(/\./g, '').trim();
       if (/^[ABCD]$/.test(cleanAns)) { ansText = cleanAns.toLowerCase(); isMcq = true; }
       else if (/^[1234]$/.test(cleanAns)) { ansText = String.fromCharCode(96 + parseInt(cleanAns)); isMcq = true; }
+      
       // Protect existing single-letter MCQ answers from being overwritten by false paragraph hits
       if (answers[qnum] && /^[a-d]$/.test(answers[qnum])) {
          if (isMcq) answers[qnum] = ansText;
@@ -1212,7 +1213,7 @@ function* iterBlockItems(body) {
       for (const el of child.getElementsByTagNameNS(W,'pict')) {
         for (const r of el.getElementsByTagNameNS(W,'r')) drawingRunSet.add(r);
       }
-      
+
       // Dictionary to map legacy Singapore HYPY font ASCII keys to Unicode Pinyin
       const hypyMap = {
         'C': 'ǎ', 'H': 'ǐ', 'K': 'ē', 'N': 'è', 'P': 'ē', 'Q': 'ó', 'S': 'è',
@@ -1228,6 +1229,7 @@ function* iterBlockItems(body) {
         if (drawingRunSet.has(run)) continue;  // skip diagram/shape label text
         // Skip deleted-text runs
         if (run.getElementsByTagNameNS(W,'del').length) continue;
+        
         // OLE MathType/object runs often have no text payload.
         // Emit a LaTeX placeholder so SLS can still render math text context.
         if (run.getElementsByTagNameNS(W,'object').length) {
@@ -1280,7 +1282,7 @@ function* iterBlockItems(body) {
         if (rId) yield { type: 'image', value: rId };
       }
     }
-    
+
     // ── Table ───────────────────────────────────────────────────────────
     else if (tag === 'tbl') {
       const rows = [];
@@ -1301,7 +1303,7 @@ function* iterBlockItems(body) {
         // getElementsByTagNameNS would also return cells from any nested tables
         // inside a cell, inflating rows[0] with nested-table content.
         for (const tc of directKids(tr, W, 'tc')) {
-          
+
           // Extract text from DIRECT <w:p> children of the cell only
           // (does not descend into nested <w:tbl> elements).
           // Paragraphs are joined with a space so multi-line option cells like
@@ -1478,7 +1480,7 @@ function essayItemXml(q, answerText) {
   const correctEl = hasAnswer
     ? `\n  <correctResponse><value>${escXml(answerText)}</value></correctResponse>`
     : '';
-  
+
   // FEEDBACK outcome — baseType MUST be "identifier" per QTI 2.1 spec (§6.4).
   // No defaultValue needed: responseProcessing sets it unconditionally below.
   const feedbackOutcomeEl = hasAnswer
@@ -1663,7 +1665,7 @@ async function parseDocxToQuestions(file, msAnswers) {
   // (until the next question label) is routed to curQ.suggestedAnswerText
   // instead of the question prompt tokens.
   const ANSWER_SPLIT_RE = /^(suggested\s+answers?|suggested\s+diagram|marking\s+scheme|marking\s+points?|possible\s+answers?(\s*\(\d+\))?|model\s+answers?)\b/i;
-  
+
   // Parse question number from table first-cell (normalises 'XX23' → '23')
   // Also strips HTML tags e.g. '<strong>1</strong>' → '1'
   function parseQnum(cell) {
