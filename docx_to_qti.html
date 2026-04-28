@@ -1387,15 +1387,7 @@ function* iterBlockItems(body) {
         cellImages.push(thisRowCellImgs);
         cellParas.push(thisRowCellParas);
       }
-      yield { type: 'table', value: rows, rowImages, cellImages, cellParas };
-      // Yield images from non-option rows as stem images after the table.
-      // Option rows (first cell = single letter A-D) keep their images at option level.
-      for (let ri = 0; ri < rows.length; ri++) {
-        const fp = (rows[ri][0] || '').replace(/<[^>]+>/g, '').trim();
-        if (!/^[A-D]$/i.test(fp)) {
-          for (const rId of rowImages[ri]) yield { type: 'image', value: rId };
-        }
-      }
+      yield { type: 'table', value: rows, rowImages, cellImages, cellParas };     
     }
   }
 }
@@ -1978,6 +1970,11 @@ async function parseDocxToQuestions(file, msAnswers) {
         } else {
           const qText = dedupCells(rows[0].slice(1));
           if (qText) curQ.tokens.push({ type:'text', value: qText });
+          // Attach images from this row directly to this question's stem
+          for (const rId of (item.rowImages[0] || [])) {
+            const fn = await resolveImage(rId);
+            if (fn) curQ.tokens.push({ type:'image', value:fn });
+          }
         }
 
         // Check for transposed A/B/C/D column-header format within this table
@@ -2008,6 +2005,11 @@ async function parseDocxToQuestions(file, msAnswers) {
             curOpts = []; curOptImages = [];
             const qText2 = dedupCells(row.slice(1));
             if (qText2) curQ.tokens.push({ type:'text', value: qText2 });
+            // Attach images from this row directly to this question's stem
+            for (const rId of (item.rowImages[0] || [])) {
+              const fn = await resolveImage(rId);
+              if (fn) curQ.tokens.push({ type:'image', value:fn });
+            }
 
           } else if (/^[A-D]$/i.test(r0plain)) {
             // MCQ option row where the letter IS the first cell
